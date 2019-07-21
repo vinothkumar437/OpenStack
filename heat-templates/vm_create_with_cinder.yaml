@@ -1,0 +1,139 @@
+heat_template_version: 2018-08-31
+
+description: >
+  This HOT template to create below items.
+  1. create a new neutron network plus a router to the public network, and for deploying Instance into the new network.
+  2. The template also assigns floating IP addresses to each server so they are routable from the public network.
+
+parameters:
+  key_name:
+    type: string
+    description: Name of keypair to assign to Instance
+    default: demo-keypair
+    
+  instance_name:
+    type: string
+    description: Name of the instance
+    default: instance01
+    
+  image:
+    type: string
+    description: Name of image to use for Instance
+    default: cirros
+    
+  flavor:
+    type: string
+    description: Flavor to use for Instance
+    default: m11.small
+    
+  public_net:
+    type: string
+    description: >
+      ID or name of public network for which floating IP addresses will be allocated
+    default: provider
+    
+  private_net_name:
+    type: string
+    description: Name of private network to be created
+    default: private-network-01
+    
+  private_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 10.0.1.0/24
+    
+  private_net_gateway:
+    type: string
+    description: Private network gateway address
+    default: 10.0.1.1
+    
+  private_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 10.0.1.2
+    
+  private_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 10.0.1.254
+   
+  router_name:
+    type: string
+    description: Create a New Router
+    default: router
+   
+  volume_size:
+    type: number
+    description: The size of the Cinder volume for instance root disk
+    default: 1
+    
+ 
+resources:
+  private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name }
+
+  private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net }
+      cidr: { get_param: private_net_cidr }
+      gateway_ip: { get_param: private_net_gateway }
+      allocation_pools:
+        - start: { get_param: private_net_pool_start }
+          end: { get_param: private_net_pool_end }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      name: { get_param: router_name }
+      external_gateway_info:
+        network: { get_param: public_net }
+        
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: private_subnet }
+  
+  cinder_volume_with_image:
+    type: OS::Cinder::Volume
+    properties:
+      name: { get_param: instance_name }
+      image: { get_param: image }
+      size: { get_param: volume_size }
+      
+  Instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: instance_name }
+      block_device_mapping_v2:
+        - device_name: /dev/vda
+          volume_id: { get_resource: cinder_volume_with_image }
+          delete_on_termination: true
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: Instance_port }
+
+  Instance_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet }
+
+  Instance_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_net }
+      port_id: { get_resource: Instance_port }
+      
+outputs:
+  Instance_private_ip:
+    description: IP address of Instance in private network
+    value: { get_attr: [ Instance, first_address ] }
+  Instance_public_ip:
+    description: Floating IP address of Instance in public network
+    value: { get_attr: [ Instance_floating_ip, floating_ip_address ] }
