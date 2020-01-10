@@ -1,0 +1,153 @@
+---
+files: {}
+disable_rollback: true
+parameters:
+  pg_hostname: postgresql01
+  pg_flavor: m1.small
+  pg_volume_size: '10'
+  pg_databasename: sampledb
+  pg_databaseuser: testuser
+  pg_databasepass: Test1234
+stack_name: teststack
+template:
+  heat_template_version: '2013-05-23'
+  description: Simple template to test heat commands
+  parameters:
+    pg_hostname:
+      default: postgresql01
+      type: string
+    pg_flavor:
+      default: m1.small
+      type: string
+    pg_volume_size:
+      default: 10
+      type: number
+    pg_databasename:
+      type: string
+      description: Enter the databasename
+      default: sampledb
+    pg_databaseuser:
+      type: string
+      description: Enter the databaseuser name
+      default: testuser
+    pg_databasepass:
+      type: string
+      description: Enter the database password
+      constraints:
+      - length:
+          min: 6
+          max: 8
+        description: Password length must be between 6 and 8 characters.
+      - allowed_pattern: "[a-zA-Z0-9]+"
+        description: Password must consist of characters and numbers only.
+      - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
+        description: Password must start with an uppercase character.
+  resources:
+    server:
+      type: OS::Nova::Server
+      properties:
+        name:
+          get_param: pg_hostname
+        config_drive: true
+        block_device_mapping:
+        - device_name: vda
+          delete_on_termination: true
+          volume_id:
+            get_resource: volume
+        flavor:
+          get_param: pg_flavor
+        key_name: dm-toolkit-keypair
+        networks:
+        - port:
+            get_resource: port
+        user_data_format: RAW
+        user_data:
+          str_replace:
+            template: "#!/bin/sh\nmkfs.xfs /dev/vdb\nmount /dev/vdb /var/lib/pgsql\nchown
+              -R postgres:postgres /var/lib/pgsql\necho \"###------------Related to
+              PostgreSQL Storage--------------###\" >> /etc/fstab\necho \"/dev/vdb
+              \   /var/lib/pgsql     xfs     defaults    0 0\" >> /etc/fstab\necho
+              \"###--------------------END--------------------------------###\" >>
+              /etc/fstab\nmount -a\nmkdir /var/lib/pgsql/backups\nchown -R postgres:postgres
+              /var/lib/pgsql/backups\n#PostgreSQL Initialization\n/usr/bin/postgresql-setup
+              initdb\n#Enable and start the service\nsystemctl enable postgresql.service\nsystemctl
+              start postgresql.service\n#Assign the password for the superuser\nsudo
+              -u postgres psql -U postgres -d postgres -c \"alter user postgres with
+              password 'pgadmin@cloud123';\"\nsystemctl restart postgresql.service\nsed
+              -i ' s/^/#/'   /var/lib/pgsql/data/pg_hba.conf\necho \"listen_addresses
+              = '*'\" >> /var/lib/pgsql/data/postgresql.conf\necho \"local all all
+              md5\" >> /var/lib/pgsql/data/pg_hba.conf\necho \"host all all 0.0.0.0/0
+              md5\" >> /var/lib/pgsql/data/pg_hba.conf\necho \"localhost:*:*:postgres:pgadmin@cloud123\"
+              > /root/.pgpass\nchmod 0600 /root/.pgpass\nsystemctl restart postgresql.service\necho
+              \"create database $databasename;\" | psql -U postgres\necho \"CREATE
+              USER $databaseuser  WITH PASSWORD '$databasepass';\" | psql -U postgres\necho
+              \"ALTER USER $databaseuser WITH CREATEDB SUPERUSER;\" | psql -U postgres
+              \necho \"ALTER USER $databaseuser WITH CREATEROLE;\" | psql -U postgres\necho
+              \"ALTER USER $databaseuser WITH REPLICATION;\" | psql -U postgres  \n"
+            params:
+              "$databasename":
+                get_param: pg_databasename
+              "$databaseuser":
+                get_param: pg_databaseuser
+              "$databasepass":
+                get_param: pg_databasepass
+    port:
+      type: OS::Neutron::Port
+      properties:
+        network: Private-Network-01
+        security_groups:
+        - default
+    floating_ip:
+      type: OS::Neutron::FloatingIP
+      properties:
+        floating_network_id: external
+        port_id:
+          get_resource: port
+    volume:
+      type: OS::Cinder::Volume
+      properties:
+        image: tool-pg-rhel7
+        size: 30
+    pg_volume:
+      type: OS::Cinder::Volume
+      properties:
+        size:
+          get_param: pg_volume_size
+        availability_zone: nova
+    volume_attachment:
+      type: OS::Cinder::VolumeAttachment
+      properties:
+        volume_id:
+          get_resource: pg_volume
+        instance_uuid:
+          get_resource: server
+        mountpoint: "/dev/vdb"
+  outputs:
+    IP_Address:
+      description: Public IP Address to connect from the remote machines
+      value:
+        get_attr:
+        - floating_ip
+        - floating_ip_address
+    Host_Username:
+      description: Username to login from the remote machines
+      value: pgadmin
+    Host_Password:
+      description: Password to login from the remote machines
+      value: Pg@cloud123
+    Database_Port:
+      description: Database Port to login from the remote machines
+      value: 5432
+    Database_Name:
+      description: Created Database Name
+      value:
+        get_param: pg_databasename
+    Database_Username:
+      description: Created Database Username
+      value:
+        get_param: pg_databaseuser
+    Database_User_Password:
+      description: Database user password
+      value:
+        get_param: pg_databasepass
+timeout_mins: 60
