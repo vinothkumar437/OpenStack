@@ -1,0 +1,146 @@
+---
+files: {}
+disable_rollback: true
+parameters:
+  mariadb_hostname: mariadb01
+  mariadb_flavor: m1.small
+  mariadb_volume_size: '10'
+  mariadb_databasename: sampledb
+  mariadb_databaseuser: testuser
+  mariadb_databasepassword: Test1234
+stack_name: mariadb01
+template:
+  heat_template_version: queens
+  description: This template to create a MariaDB.
+  parameters:
+    key_name:
+      type: string
+      description: Name of keypair to assign to Instance
+      default: dm-toolkit-keypair
+    mariadb_hostname:
+      type: string
+      description: Name of the instance
+    image:
+      type: string
+      description: Name of image to use for Instance
+      default: Updated-MariaDB-10-1-rhel7
+    mariadb_flavor:
+      type: string
+      description: Flavor to use for Instance
+    external_network:
+      type: string
+      description: ID or name of public network for which floating IP addresses will be allocated
+      default: external
+    service_network:
+      type: string
+      description: Name of private network to be created
+      default: Private-Network-01
+    volume_size:
+      type: number
+      description: The size of the Cinder volume for instance root disk
+      default: 100
+    mariadb_volume_size:
+      type: number
+      description: The size of the Cinder volume for instance additional disk
+    mariadb_databasename:
+      type: string
+      description: Enter the databasename
+    mariadb_databaseuser:
+      type: string
+      description: Enter the databaseuser name
+      default: testuser
+    mariadb_databasepassword:
+      type: string
+      description: Enter the database password
+      constraints:
+      - length:
+          min: 6
+          max: 8
+        description: Password length must be between 6 and 8 characters.
+      - allowed_pattern: "[a-zA-Z0-9]+"
+        description: Password must consist of characters and numbers only.
+      - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
+        description: Password must start with an uppercase character.
+  resources:
+    server:
+      type: OS::Nova::Server
+      properties:
+        name: { get_param: mariadb_hostname }
+        config_drive: true
+        availability_zone: rhel_vdc_cluster
+        block_device_mapping:
+        - device_name: vda
+          delete_on_termination: true
+          volume_id: { get_resource: volume }
+        flavor: {get_param: mariadb_flavor}
+        key_name: {get_param: key_name}
+        networks:
+        - port: { get_resource: port }
+        user_data_format: RAW
+        user_data: 
+          str_replace: 
+            template: |
+              #!/bin/sh
+              echo 'nameserver 192.168.200.55' >> /etc/resolv.conf
+              mkfs.xfs /dev/vdb
+              mount /dev/vdb /var/lib/mysql
+              chown -R mysql:mysql /var/lib/mysql
+              echo "###------------Related to MariaDB Storage--------------###" >> /etc/fstab
+              echo "/dev/vdb    /var/lib/mysql     xfs     defaults    0 0" >> /etc/fstab
+              echo "###--------------------END--------------------------------###" >> /etc/fstab
+              mount -a
+              mysql_template -MYSQL_ROOT_PASSWORD $databasepass -MYSQL_DATABASE $databasename -MYSQL_PASSWORD $databasepass -MYSQL_USER $databaseuser
+            params:
+              "$databasename":
+                get_param: mariadb_databasename
+              "$databaseuser":
+                get_param: mariadb_databaseuser
+              "$databasepass":
+                get_param: mariadb_databasepassword
+    port:
+      type: OS::Neutron::Port
+      properties:
+        network: {get_param: service_network}
+        security_groups:
+        - default
+    floating_ip:
+      type: OS::Neutron::FloatingIP
+      properties:
+        floating_network_id: {get_param: external_network}
+        port_id: { get_resource: port }
+    volume:
+      type: OS::Cinder::Volume
+      properties:
+        image: {get_param: image}
+        size: 100
+    mariadb_volume:
+      type: OS::Cinder::Volume
+      properties:
+        size: {get_param: mariadb_volume_size }
+        availability_zone: nova
+    volume_attachment:
+      type: OS::Cinder::VolumeAttachment
+      properties:
+        volume_id: { get_resource: mariadb_volume }
+        instance_uuid: { get_resource: server }
+        mountpoint: /dev/vdb
+  outputs:
+    ip_address:
+      description: Floating IP address of server in public network
+      value: { get_attr: [floating_ip, floating_ip_address ] }
+    MariaDB_Database_Port:
+      description: Database Port to login from the remote machines
+      value: 3306
+    MariaDB_Database_Name:
+      description: Created Database Name
+      value:
+        get_param: mariadb_databasename
+    MariaDB_Database_Username:
+      description: Created Database Username
+      value:
+        get_param: mariadb_databaseuser
+    MariaDB_Database_User_Password:
+      description: Database user password
+      value:
+        get_param: mariadb_databasepassword
+timeout_mins: 60
