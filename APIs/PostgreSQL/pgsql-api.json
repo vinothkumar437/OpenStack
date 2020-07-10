@@ -1,0 +1,148 @@
+---
+files: {}
+disable_rollback: true
+parameters:
+  pg_hostname: postgresql03
+  pg_flavor: m1.small
+  pg_volume_size: '10'
+  pg_databasename: sampledb02
+  pg_databaseuser: testuser
+  pg_databasepass: Test1234
+stack_name: pg-stack
+template:
+  heat_template_version: '2013-05-23'
+  description: PostgreSQL 12 Database Creation
+  parameters:
+    pg_hostname:
+      default: postgresql01
+      type: string
+    pg_flavor:
+      default: m1.small
+      type: string
+    pg_volume_size:
+      default: 10
+      type: number
+    pg_databasename:
+      type: string
+      description: Enter the databasename
+      default: sampledb
+    pg_databaseuser:
+      type: string
+      description: Enter the databaseuser name
+      default: testuser
+    pg_databasepass:
+      type: string
+      description: Enter the database password
+      constraints:
+      - length:
+          min: 6
+          max: 8
+        description: Password length must be between 6 and 8 characters.
+      - allowed_pattern: "[a-zA-Z0-9]+"
+        description: Password must consist of characters and numbers only.
+      - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
+        description: Password must start with an uppercase character.
+  resources:
+    server:
+      type: OS::Nova::Server
+      properties:
+        name:
+          get_param: pg_hostname
+        config_drive: true
+        block_device_mapping:
+        - device_name: vda
+          delete_on_termination: true
+          volume_id:
+            get_resource: volume
+        flavor:
+          get_param: pg_flavor
+        key_name: dm-toolkit-keypair
+        networks:
+        - port:
+            get_resource: port
+        user_data_format: RAW
+        user_data:
+          str_replace:
+            template:  |
+              #!/bin/sh
+              mkfs.xfs /dev/vdb
+              mount /dev/vdb /var/lib/pgsql
+              chown -R postgres:postgres /var/lib/pgsql
+              echo "###------------Related to PostgreSQL Storage--------------###" >> /etc/fstab
+              echo "/dev/vdb /var/lib/pgsql     xfs     defaults    0 0" >> /etc/fstab 
+              echo "###--------------------END--------------------------------###" >> /etc/fstab 
+              mount -a
+              pgsql_template -PGSQL_DATABASE $databasename -PGSQL_PASSWORD $databasepass -PGSQL_ROOT_PASSWORD $databasepass -PGSQL_USER $databaseuser
+            params:
+              "$databasename":
+                get_param: pg_databasename
+              "$databaseuser":
+                get_param: pg_databaseuser
+              "$databasepass":
+                get_param: pg_databasepass
+    port:
+      type: OS::Neutron::Port
+      properties:
+        network: Private-Network-01
+        security_groups:
+        - default
+    floating_ip:
+      type: OS::Neutron::FloatingIP
+      properties:
+        floating_network_id: external
+        port_id:
+          get_resource: port
+    volume:
+      type: OS::Cinder::Volume
+      properties:
+        image: pgsql-12
+        size: 100
+    pg_volume:
+      type: OS::Cinder::Volume
+      properties:
+        size:
+          get_param: pg_volume_size
+        availability_zone: nova
+    volume_attachment:
+      type: OS::Cinder::VolumeAttachment
+      properties:
+        volume_id:
+          get_resource: pg_volume
+        instance_uuid:
+          get_resource: server
+        mountpoint: "/dev/vdb"
+  outputs:
+    IP_Address:
+      description: Public IP Address to connect from the remote machines
+      value:
+        get_attr:
+        - floating_ip
+        - floating_ip_address
+    Database_Port:
+      description: Database Port to login from the remote machines
+      value: 5432
+    Database_Name:
+      description: Created Database Name
+      value:
+        get_param: pg_databasename
+    Database_Username:
+      description: Created Database Username
+      value:
+        get_param: pg_databaseuser
+    Database_User_Password:
+      description: Database user password
+      value:
+        get_param: pg_databasepass
+    Database_Web_Console_URL:
+      description: Database Web Console
+      value:
+        list_join: ['', ['http://', {get_attr: [floating_ip, floating_ip_address]}, '/pgadmin4']]
+    Database_Web_Console_Username:
+      description: Database Web Console Username
+      value: 
+        list_join: ['', [{get_param: pg_databaseuser}, '@infosysitdbaas.local']]
+    Database_Web_Console_Password:
+      description: Database Web Console Password 
+      value: 
+        get_param: pg_databasepass              
+timeout_mins: 60
